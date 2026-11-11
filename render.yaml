@@ -1,0 +1,27 @@
+# Render Blueprint: New > Blueprint > pick this repository.
+# A persistent disk is required (SQLite). Render only offers disks on paid plans.
+services:
+  - type: web
+    name: noticing-lab
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    disk:
+      name: pd-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: PD_DB_PATH
+        value: /data/pd.sqlite
+      # Creates the first facilitator on first start only. Set these in the Render dashboard, then delete them.
+      - key: BOOTSTRAP_FACILITATOR_EMAIL
+        sync: false
+      - key: BOOTSTRAP_FACILITATOR_NAME
+        sync: false
+      - key: BOOTSTRAP_FACILITATOR_PASSWORD
+        sync: false
+      # Optional: real AI summaries. Without it the app uses the labelled simulator.
+      - key: ANTHROPIC_API_KEY
+        sync: false
