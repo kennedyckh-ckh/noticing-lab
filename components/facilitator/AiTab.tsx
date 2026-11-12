@@ -326,6 +326,7 @@ function DraftCard({ o, sid, act }: { o: Output; sid: string; act: (fn: () => Pr
   const [editError, setEditError] = useState<string | null>(null);
   const [showWarn, setShowWarn] = useState(false);
   const reviewed = !!o.reviewed_at;
+  const outdated = o.warnings.some((warning) => warning.startsWith("OUTDATED:"));
 
   async function save(content: unknown) {
     setSaving(true);
@@ -349,6 +350,7 @@ function DraftCard({ o, sid, act }: { o: Output; sid: string; act: (fn: () => Pr
           <Badge tone="blue">{partLabel(o.part)}</Badge>
           {o.simulated ? <Badge tone="amber">Simulated, not AI</Badge> : <Badge tone="purple">{o.model}</Badge>}
           {o.edited && <Badge tone="gray">Edited by you</Badge>}
+          {outdated && <Badge tone="red">Outdated: regenerate after resubmission</Badge>}
           {o.status === "published" ? <Badge tone="green">Published {fmtDate(o.published_at)}</Badge> : reviewed ? <Badge tone="green">Reviewed</Badge> : <Badge tone="amber">Draft: not reviewed</Badge>}
           <span className="text-xs text-slate-400">generated {fmtDate(o.created_at)}</span>
         </div>
@@ -360,11 +362,11 @@ function DraftCard({ o, sid, act }: { o: Output; sid: string; act: (fn: () => Pr
           ) : (
             <>
               {!editing && (
-                <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>
+                <Button size="sm" variant="secondary" disabled={outdated} onClick={() => setEditing(true)}>
                   Edit
                 </Button>
               )}
-              <Button size="sm" variant={reviewed ? "secondary" : "primary"} onClick={() => act(() => api("POST", `/api/facilitator/ai/${o.id}/review`, { reviewed: !reviewed }))}>
+              <Button size="sm" variant={reviewed ? "secondary" : "primary"} disabled={outdated} onClick={() => act(() => api("POST", `/api/facilitator/ai/${o.id}/review`, { reviewed: !reviewed }))}>
                 {reviewed ? "Remove reviewed mark" : "Mark as reviewed"}
               </Button>
               <Button
@@ -380,6 +382,7 @@ function DraftCard({ o, sid, act }: { o: Output; sid: string; act: (fn: () => Pr
           )}
         </div>
       </header>
+      {outdated && <div className="mb-3"><Banner tone="amber">Part 1 was reopened after this analysis was generated. This is an earlier version kept for reference, not a current summary. Generate a fresh analysis from the resubmitted work, then review and publish it.</Banner></div>}
       {o.kind === "salient_points" && o.criteria && (
         <p className="mb-3 rounded-lg bg-slate-50 p-2.5 text-xs text-slate-600">
           <strong>Criteria used:</strong> {o.criteria}
@@ -399,7 +402,7 @@ function DraftCard({ o, sid, act }: { o: Output; sid: string; act: (fn: () => Pr
           )}
         </div>
       )}
-      {editing ? (
+      {editing && !outdated ? (
         <AiEditor kind={o.kind} initial={o.content} saving={saving} error={editError} onSave={save} onCancel={() => setEditing(false)} />
       ) : (
         <>
