@@ -1,5 +1,6 @@
-import { getDb } from "./db";
+ import { getDb } from "./db";
 import { requireSessionOwner } from "./authz";
+import { previousPart1Submissions } from "./reopen-part1";
 import { audit, formatTimestamp, invalid, now } from "./util";
 import { STAGE_LABELS, type User } from "./types";
 import type { RawFile } from "./router";
@@ -118,6 +119,7 @@ export function collectExport(user: User, sessionId: string) {
   }));
   return {
     session: s,
+    previous_part1_submissions: previousPart1Submissions(s.id),
     questions,
     groups,
     submissions: subs.map((x) => ({
