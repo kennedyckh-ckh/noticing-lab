@@ -1,7 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, errorMessage, fmtDate, fmtTime } from "@/lib/client/api";
-import { Badge, Banner, Button, Card } from "@/components/ui";
+import { Badge, Banner, Button, Card, Label, Modal, inputClass } from "@/components/ui";
 import { usePoll } from "@/components/usePoll";
 import type { Dash, Detail } from "./types";
 
@@ -31,9 +31,64 @@ interface Contrib {
 export function Contributions({ dash, detail, groupId, setGroupId, reloadDash }: { dash: Dash; detail: Detail | null; groupId: string; setGroupId: (g: string) => void; reloadDash: () => void }) {
   const [partFilter, setPartFilter] = useState<0 | 1 | 2>(0);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reopening, setReopening] = useState<{ id: string; name: string; submitted_at: string } | null>(null);
+  const [reopenBusy, setReopenBusy] = useState(false);
+  const [reopenError, setReopenError] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const reopenDialogBody = useRef<HTMLDivElement>(null);
   const sid = dash.session.id;
   const c = usePoll<Contrib>(() => api<Contrib>("GET", `/api/facilitator/sessions/${sid}/groups/${groupId}/entries`), 10000, [sid, groupId]);
   const qText = new Map(detail?.guiding_questions.map((q) => [q.id, `${q.position}. ${q.text}`]) ?? []);
+  const selectedData = c.data?.group.id === groupId ? c.data : null;
+  const part1Submission = selectedData?.submissions.find((s) => s.part === 1);
+
+  useEffect(() => {
+    if (!reopening) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = reopenDialogBody.current?.closest<HTMLElement>('[role="dialog"]');
+    if (!dialog) return;
+    dialog.querySelector<HTMLElement>("#reopen-reason")?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const items = Array.from(dialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), textarea:not(:disabled)"));
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", trap);
+    return () => {
+      document.removeEventListener("keydown", trap);
+      if (previous?.isConnected) previous.focus();
+    };
+  }, [reopening]);
+
+  async function reopen() {
+    if (!reopening || reopenBusy) return;
+    setReopenBusy(true);
+    setReopenError(null);
+    try {
+      await api("POST", `/api/facilitator/sessions/${sid}/groups/${reopening.id}/reopen-part1`, {
+        reason, confirm: confirmation, submitted_at: reopening.submitted_at,
+      });
+      setNotice(`Part 1 reopened for ${reopening.name}. Existing entries are kept. Each teacher can edit their own entries, and one group member can submit again. Affected shared work and AI analyses have been withdrawn.`);
+      setReopening(null);
+      await c.reload();
+      reloadDash();
+    } catch (e) {
+      setReopenError(errorMessage(e));
+    } finally {
+      setReopenBusy(false);
+    }
+  }
 
   async function share(entryId: string, shared: boolean, showAuthor: boolean) {
     setError(null);
@@ -65,6 +120,24 @@ export function Contributions({ dash, detail, groupId, setGroupId, reloadDash }:
         ))}
       </div>
 
+      {selectedData && (
+        <Card title="Part 1 resubmission" actions={
+          <Button variant="secondary" disabled={!part1Submission || !selectedData.group.active || reopenBusy} onClick={() => {
+            if (!part1Submission) return;
+            setReopening({ id: selectedData.group.id, name: selectedData.group.name, submitted_at: part1Submission.submitted_at });
+            setReason("");
+            setConfirmation("");
+            setReopenError(null);
+          }}>Reopen Part 1</Button>
+        }>
+          <p className="text-sm text-slate-600">{!selectedData.group.active
+            ? "Mark this group active in Groups & people before reopening its work."
+            : part1Submission
+              ? `Allow ${selectedData.group.name} to revise and resubmit Part 1 without deleting their entries.`
+              : "Part 1 is already open for editing. No reopening is needed until this group submits."}</p>
+        </Card>
+      )}
+      {notice && <Banner tone="green" onClose={() => setNotice(null)}>{notice}</Banner>}
       {!dash.session.sharing_enabled && <Banner tone="amber">Sharing is switched off for this session (Settings tab). Entries you mark as shared stay hidden from participants until you switch it back on.</Banner>}
       {error && (
         <Banner tone="red" onClose={() => setError(null)}>
@@ -134,6 +207,32 @@ export function Contributions({ dash, detail, groupId, setGroupId, reloadDash }:
           Refresh now
         </Button>
       </div>
+      <Modal
+        open={!!reopening}
+        title={`Reopen Part 1 for ${reopening?.name ?? "this group"}?`}
+        onClose={() => { if (!reopenBusy) setReopening(null); }}
+        footer={<>
+          <Button variant="secondary" disabled={reopenBusy} onClick={() => setReopening(null)}>Cancel</Button>
+          <Button variant="accent" loading={reopenBusy} disabled={reason.trim().length < 5 || confirmation !== "REOPEN"} onClick={() => void reopen()}>
+            Reopen Part 1 for editing
+          </Button>
+        </>}
+      >
+        <div ref={reopenDialogBody} className="space-y-4">
+          <p>This keeps every current entry and saves a copy of the previous submission. Teachers can edit their own entries again; one group member then submits Part 1 for the whole group.</p>
+          <Banner tone="amber">Previously shared Part 1 entries from this group will be unshared. This group&apos;s Part 1 or combined AI summaries, and whole-session analyses involving Part 1, will be marked outdated and unpublished. Generate fresh analyses after resubmission, then review and publish them.</Banner>
+          <p>Part 2 is not reset or relocked. Its existing entries and submissions stay unchanged; further Part 2 editing waits until Part 1 is resubmitted. If Part 2 has already opened, revised Part 1 work is no longer a strictly unguided first response.</p>
+          <div>
+            <Label htmlFor="reopen-reason">Reason for reopening</Label>
+            <textarea id="reopen-reason" rows={2} maxLength={500} className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} disabled={reopenBusy} />
+          </div>
+          <div>
+            <Label htmlFor="reopen-confirm">Type REOPEN to confirm</Label>
+            <input id="reopen-confirm" autoComplete="off" className={inputClass} value={confirmation} onChange={(e) => setConfirmation(e.target.value)} disabled={reopenBusy} />
+          </div>
+          {reopenError && <Banner tone="red">{reopenError}</Banner>}
+        </div>
+      </Modal>
     </div>
   );
 }
