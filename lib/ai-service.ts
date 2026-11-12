@@ -2,6 +2,7 @@ import { getDb } from "./db";
 import { requireFacilitator, requireSessionMember, requireSessionOwner } from "./authz";
 import { asRecord, audit, conflict, invalid, notFound, now, str, uid, HttpError } from "./util";
 import { stageGate } from "./facilitator";
+import { assertAiOutputCurrent, submissionScopeToken } from "./reopen-part1";
 import { loadSnapshots, type EntrySnap } from "./ai/entries";
 import { getProvider, providerInfo } from "./ai/provider";
 import { normaliseContent } from "./ai/validate";
@@ -136,7 +137,11 @@ export async function generate(user: User, sessionId: string, bodyRaw: unknown) 
   const criteria = kind === "salient_points" ? str(body.criteria ?? s.salient_criteria, "Criteria", 2000) : "";
   if (kind === "salient_points" && !criteria) throw invalid("Write the criteria for salient points (or save default criteria in Settings) first");
 
+  const submissionToken = submissionScopeToken(s.id, parts, groupId);
   const result = await getProvider()({ kind, entries, criteria });
+  if (submissionToken !== submissionScopeToken(s.id, parts, groupId)) {
+    throw conflict("Submitted work changed while the AI was running. The response was discarded. Generate again after resubmission.", "AI_SOURCES_CHANGED");
+  }
   const { content, warnings, sourceIds } = normaliseContent(kind, result.raw, entries, missingNotes);
   const allWarnings = result.simulated ? ["Simulated output: no AI model was used.", ...warnings] : warnings;
   const id = uid();
@@ -157,6 +162,7 @@ function allowedForEdit(o: OutputRow): EntrySnap[] {
 
 export function editOutput(user: User, id: string, bodyRaw: unknown) {
   const { o } = ownOutput(user, id);
+  assertAiOutputCurrent(o.id);
   if (o.status === "published") throw conflict("Unpublish this output before editing it", "PUBLISHED");
   const body = asRecord(bodyRaw);
   if (!body.content || typeof body.content !== "object") throw invalid("content is required");
@@ -169,6 +175,7 @@ export function editOutput(user: User, id: string, bodyRaw: unknown) {
 
 export function markReviewed(user: User, id: string, bodyRaw: unknown) {
   const { o } = ownOutput(user, id);
+  assertAiOutputCurrent(o.id);
   if (o.status === "published") throw conflict("This output is already published", "PUBLISHED");
   const on = asRecord(bodyRaw).reviewed !== false;
   const t = now();
@@ -217,6 +224,7 @@ export function publishKind(user: User, sessionId: string, kind: string, bodyRaw
     rows = rows.filter((r) => r.reviewed_at);
   }
   if (rows.length === 0) throw conflict("There are no reviewed drafts to publish. Open a draft, check it, edit if needed, and mark it reviewed first.", "NOTHING_TO_PUBLISH");
+  for (const row of rows) assertAiOutputCurrent(row.id);
   const t = now();
   db.transaction(() => {
     for (const r of rows) {
