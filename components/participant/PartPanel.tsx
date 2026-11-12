@@ -205,6 +205,7 @@ export function PartPanel({ part, ws, data, reload, save }: Props) {
       {submitted && (
         <Banner tone="green">
           <strong>Part {part} was submitted</strong> by {data.submitted_by} on {fmtDate(data.submitted_at)}. It is locked for everyone in {ws.group.name}.
+          {part === 1 && " Ask your facilitator if your group needs to revise and resubmit Part 1."}
         </Banner>
       )}
       {notice && (
@@ -286,7 +287,7 @@ export function PartPanel({ part, ws, data, reload, save }: Props) {
       >
         {review?.changed && <Banner tone="amber">A teammate changed the group&apos;s entries while you were reviewing. This is the latest list: please check it again.</Banner>}
         <p className="mt-2">
-          This submits the work of <strong>everyone in your group</strong> ({reviewCount} {reviewCount === 1 ? "entry" : "entries"}) and <strong>locks Part {part}</strong>. Nobody can edit it afterwards. Completely blank entries are discarded.
+          This submits the work of <strong>everyone in your group</strong> ({reviewCount} {reviewCount === 1 ? "entry" : "entries"}) and <strong>locks Part {part}</strong>. {part === 1 ? "Editing stays locked unless your facilitator reopens Part 1." : "Nobody can edit it afterwards."} Completely blank entries are discarded.
         </p>
         {reviewProblems.length > 0 && (
           <div className="mt-3">
