@@ -1,4 +1,4 @@
-/**
+ /**
  * One router for the whole API. Each route declares the role it needs; the dispatcher enforces
  * authentication, role, forced password change and CSRF BEFORE the handler runs, so a handler
  * cannot forget it. Handlers then apply resource-level checks (session / group / stage).
@@ -10,6 +10,7 @@ import { getDb } from "./db";
 import type { User } from "./types";
 import * as P from "./participant";
 import * as F from "./facilitator";
+import * as SM from "./session-management";
 import { exportSession } from "./export";
 import * as AI from "./ai-service";
 import { publishedView } from "./ai-service";
@@ -105,8 +106,10 @@ export const routes: Route[] = [
   r("DELETE", "/api/entries/:eid", "participant", (c) => P.deleteEntry(c.user, c.params.eid)),
 
   // ----- facilitator: sessions, groups, roster, questions -----
-  r("GET", "/api/facilitator/sessions", "facilitator", (c) => F.listSessions(c.user)),
+  r("GET", "/api/facilitator/sessions", "facilitator", (c) => SM.listManagedSessions(c.user)),
   r("POST", "/api/facilitator/sessions", "facilitator", (c) => F.createSession(c.user, c.body)),
+  r("POST", "/api/facilitator/sessions/:sid/archive", "facilitator", (c) => SM.setSessionArchived(c.user, c.params.sid, c.body)),
+  r("DELETE", "/api/facilitator/sessions/:sid", "facilitator", (c) => SM.deleteManagedSession(c.user, c.params.sid, c.body)),
   r("GET", "/api/facilitator/sessions/:sid", "facilitator", (c) => F.sessionDetail(c.user, c.params.sid)),
   r("PATCH", "/api/facilitator/sessions/:sid", "facilitator", (c) => F.updateSession(c.user, c.params.sid, c.body)),
   r("POST", "/api/facilitator/sessions/:sid/groups", "facilitator", (c) => F.createGroup(c.user, c.params.sid, c.body)),
