@@ -20,6 +20,100 @@ export interface AiResult {
 
 export type AiProvider = (req: AiRequest) => Promise<AiResult>;
 
+/**
+ * HKU Azure OpenAI gateway. Secrets are read only by this server-side module.
+ * No SDK or package changes are required.
+ */
+export function createHkuProvider(): AiProvider {
+  return async (req) => {
+    const key = process.env.HKU_OPENAI_API_KEY?.trim();
+    const model = process.env.AI_MODEL?.trim() || "gpt-4.1-nano";
+    const version = process.env.HKU_OPENAI_API_VERSION?.trim() || "2025-04-01-preview";
+    const endpoint = process.env.HKU_OPENAI_ENDPOINT?.trim() || "https://api.hku.hk/openai";
+    let url: URL;
+    try {
+      url = new URL(`${endpoint.replace(/\/+$/, "")}/deployments/${encodeURIComponent(model)}/chat/completions`);
+      if (url.protocol !== "https:" || url.hostname !== "api.hku.hk" || url.username || url.password || url.hash) {
+        throw new Error("Invalid HKU endpoint");
+      }
+      url.searchParams.set("api-version", version);
+    } catch {
+      throw new HttpError(503, "HKU_OPENAI_ENDPOINT must be the HTTPS HKU API base URL, without deployment or query parameters.", "AI_CONFIG");
+    }
+    if (!key) {
+      throw new HttpError(503, "Set HKU_OPENAI_API_KEY in Render's environment settings.", "AI_CONFIG");
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        method: "POST",
+        redirect: "error",
+        headers: { "Content-Type": "application/json", "api-key": key },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: buildUserMessage(req.kind, req.entries, req.criteria) },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: { name: `noticing_${req.kind}`, strict: true, schema: SCHEMAS[req.kind] },
+          },
+          max_tokens: 8192,
+          temperature: 0.2,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch {
+      throw new HttpError(502, "Could not reach the HKU AI service, or the request timed out. Please try again.", "AI_UNREACHABLE");
+    }
+
+    // Do not log upstream response bodies: they may contain sensitive information.
+    if (!response.ok) {
+      if (response.status === 429) {
+        throw new HttpError(503, "The HKU AI rate limit or quota was reached. Wait before retrying; check your subscription usage if it continues.", "AI_BUSY");
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw new HttpError(502, "HKU rejected the request. Check HKU_OPENAI_API_KEY and your subscription access.", "AI_AUTH");
+      }
+      if (response.status === 404) {
+        throw new HttpError(502, "The HKU deployment or endpoint was not found. Check AI_MODEL, HKU_OPENAI_ENDPOINT and HKU_OPENAI_API_VERSION.", "AI_MODEL");
+      }
+      if (response.status === 400) {
+        throw new HttpError(502, "HKU rejected the request format. Check the deployment and API version, including support for structured JSON output. Nothing was saved.", "AI_REQUEST");
+      }
+      throw new HttpError(502, `The HKU AI service returned HTTP ${response.status}. Nothing was saved.`, "AI_ERROR");
+    }
+
+    let data: {
+      choices?: Array<{ finish_reason?: string; message?: { content?: string | null; refusal?: string | null } }>;
+    };
+    try {
+      data = await response.json();
+    } catch {
+      throw new HttpError(502, "HKU returned an unreadable response. Nothing was saved.", "AI_BAD_OUTPUT");
+    }
+    const choice = data?.choices?.[0];
+    if (choice?.message?.refusal || choice?.finish_reason === "content_filter") {
+      throw new HttpError(422, "The HKU AI service declined this material. Nothing was saved. Review the submitted entries.", "AI_REFUSED");
+    }
+    if (choice?.finish_reason === "length") {
+      throw new HttpError(502, "The HKU AI response was cut off and discarded. Try fewer entries or one part at a time.", "AI_TRUNCATED");
+    }
+    if (choice?.finish_reason !== "stop" || typeof choice.message?.content !== "string") {
+      throw new HttpError(502, "HKU did not return a complete text response. Nothing was saved.", "AI_INCOMPLETE");
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(choice.message.content);
+    } catch {
+      throw new HttpError(502, "HKU returned invalid JSON, so it was discarded. Please try again.", "AI_BAD_OUTPUT");
+    }
+    return { raw, provider: "hku", model, simulated: false };
+  };
+}
+
 // Preserved from your original file.
 // For Claude, set AI_MODEL to a model available to your account.
 export const DEFAULT_MODEL = "claude-opus-5-5";
@@ -367,6 +461,18 @@ export function providerInfo(): {
     .trim()
     .toLowerCase();
 
+  if (selected === "hku") {
+    const configured = !!process.env.HKU_OPENAI_API_KEY?.trim();
+    return {
+      name: "hku",
+      simulated: false,
+      model: process.env.AI_MODEL?.trim() || "gpt-4.1-nano",
+      reason: configured
+        ? "HKU Azure OpenAI selected. Responses still require facilitator review."
+        : "HKU selected, but HKU_OPENAI_API_KEY is missing. Generation will fail until configured.",
+    };
+  }
+
   if (selected === "gemini") {
     const configured =
       !!process.env.GEMINI_API_KEY?.trim() &&
@@ -409,6 +515,10 @@ export function getProvider(): AiProvider {
   if (override) return override;
 
   const info = providerInfo();
+
+  if (info.name === "hku") {
+    return createHkuProvider();
+  }
 
   if (info.name === "gemini") {
     return createGeminiProvider();
