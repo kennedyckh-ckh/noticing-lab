@@ -1,4 +1,4 @@
- /**
+/**
  * One router for the whole API. Each route declares the role it needs; the dispatcher enforces
  * authentication, role, forced password change and CSRF BEFORE the handler runs, so a handler
  * cannot forget it. Handlers then apply resource-level checks (session / group / stage).
@@ -11,6 +11,7 @@ import type { User } from "./types";
 import * as P from "./participant";
 import * as F from "./facilitator";
 import * as SM from "./session-management";
+import { reopenPart1 } from "./reopen-part1";
 import { exportSession } from "./export";
 import * as AI from "./ai-service";
 import { publishedView } from "./ai-service";
@@ -124,6 +125,7 @@ export const routes: Route[] = [
   // ----- facilitator: dashboard, stage control, sharing -----
   r("GET", "/api/facilitator/sessions/:sid/dashboard", "facilitator", (c) => F.dashboard(c.user, c.params.sid)),
   r("GET", "/api/facilitator/sessions/:sid/groups/:gid/entries", "facilitator", (c) => F.groupContributions(c.user, c.params.sid, c.params.gid)),
+  r("POST", "/api/facilitator/sessions/:sid/groups/:gid/reopen-part1", "facilitator", (c) => reopenPart1(c.user, c.params.sid, c.params.gid, c.body)),
   r("POST", "/api/facilitator/sessions/:sid/unlock-part2", "facilitator", (c) => F.unlockPart2(c.user, c.params.sid, c.body)),
   r("POST", "/api/facilitator/sessions/:sid/override", "facilitator", (c) => {
     const b = asRecord(c.body);
